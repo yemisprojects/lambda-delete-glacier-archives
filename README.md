@@ -5,9 +5,9 @@
 
 ## How does this solution work
 
-This solution requires the vault's archive id's available in a S3 bucket before implementation. Hence, an inventory of the vault first needs to be obtained. This can be done using the AWS CLI. The vault's archive ids are obtained from the inventory, extracted into a file(s) and uploaded to an S3 bucket. A lambda function reads the S3 Bucket and sends messages to a standard SQS queue. Each message contains a name of a file in the S3 Bucket. Another lambda function polls the queue and processes the messages to delete the archives in a glacier vault. 
+This solution requires the vault's archive id's be available in a S3 bucket before invoking the deployed solution. Hence, an inventory of the vault first needs to be obtained. This can be done using the AWS CLI. The vault's archive ids are obtained from the inventory, extracted into a file(s) and uploaded to an S3 bucket. Per the architecture diagram above, once the solution is deployed and invoked a lambda function reads the S3 Bucket and sends messages to a standard SQS queue. Each message references a file in the S3 Bucket. Another lambda function polls the queue and processes the messages to delete the archives in a glacier vault. 
 
-The Consumer lambda function is set to reserve a concurrency [(defined here in the cloudformation template)](https://github.com/yemisprojects/lambda-delete-glacier-archives/blob/main/Cloudformation/main_template.yaml#L181) in a bid to limit the API call rate to delete the archives. Scaling the function on demand can cause significant throttling from Glacier service if there is a huge number of archives. 
+The archive remover lambda function uses a reserved concurrency [(defined here in the cloudformation template)](https://github.com/yemisprojects/lambda-delete-glacier-archives/blob/main/Cloudformation/main_template.yaml#L181) as a way to limit the API call rate to delete the archives. When the lambda function scales on demand due to the queue it can cause significant throttling if there is a large number of archives. 
 
 ## When to use this solution
 - This solution is more suited for vaults with thousands or millions of archives
@@ -32,7 +32,6 @@ The Consumer lambda function is set to reserve a concurrency [(defined here in t
 6. Deploy the cross stack template, [main.yaml](https://github.com/yemisprojects/lambda-delete-glacier-archives/blob/main/Cloudformation/main_template.yaml).
     - Ensure you specify a [vault name](https://github.com/yemisprojects/lambda-delete-glacier-archives/blob/main/Cloudformation/main_template.yaml#L30)
 7. Invoke the S3BucketReader lambda function to initiate the job
-
 
 ##### Detailed deployment steps [documented here](https://github.com/yemisprojects/lambda-delete-glacier-archives/tree/main/doc)
 
