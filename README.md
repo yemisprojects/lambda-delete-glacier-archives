@@ -20,12 +20,12 @@ The archive remover lambda function uses a reserved concurrency [(defined here i
 - Install AWS CLI
 - Install python 3.x on your local PC.
 
-## High Level Deployment Steps
+## High level deployment steps
 
 1. Obtain a json inventory file for the vault to be deleted using this [aws documentation](https://docs.aws.amazon.com/amazonglacier/latest/dev/deleting-vaults-cli.html#Deleting-A-Nonempty-Vaults-CLI-Implementation)
-2. Create an S3 bucket using this cloudformation template, [bucket.yaml](https://github.com/yemisprojects/lambda-delete-glacier-archives/blob/main/Cloudformation/main_template.yaml)
+2. Create an S3 bucket using this cloudformation template, [bucket.yaml](https://github.com/yemisprojects/lambda-delete-glacier-archives/blob/main/Cloudformation/main_template.yaml) to store lambda deployment packages
 3. Split the archive ids from the json file into any desired number of files using this script, [generate_split_files.py](https://github.com/yemisprojects/lambda-delete-glacier-archives/tree/main/script)
-4. Upload the script's generated folder (with included files) to the root of the S3 bucket
+4. Upload the script's generated folder (with included files) from step 3 to the root of the S3 bucket
 5. Upload these lambda deployment zip packages to the root of the S3 bucket
     - [s3_bucket_reader.zip](https://github.com/yemisprojects/lambda-delete-glacier-archives/tree/main/src/producer)
     - [delete_glacier_archive.zip](https://github.com/yemisprojects/lambda-delete-glacier-archives/tree/main/src/consumer)
