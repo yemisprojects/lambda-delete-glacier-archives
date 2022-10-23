@@ -1,0 +1,21 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates bucket with a name based on accountID and region name to store lamba code and files with archive ids
+Resources:
+  S3Bucket:
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub "glacier-archive-remover-${AWS::AccountId}-${AWS::Region}"                         
+Outputs:
+  S3BucketArn:
+    Description: Bucket arn where lambda code and archive files are to be stored
+    Value: !GetAtt S3Bucket.Arn
+    Export:
+      Name: "glacier-remover-bucket-arn"
+
+  S3BucketName:
+    Description: Bucket name where lambda code and archive files are to be stored
+    Value: !Ref S3Bucket
+    Export:
+      Name: "glacier-remover-bucket-name"

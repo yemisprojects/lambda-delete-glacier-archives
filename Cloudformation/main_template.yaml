@@ -1,0 +1,271 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: This solution deploys SQS Queues, Lambda Functions and IAM Roles to delete Glacier Vault Archives.
+
+Parameters:
+  S3ReaderFn:
+    Type: String
+    Default: S3BucketReader
+    AllowedValues: [ S3BucketReader ]
+    Description: Name of Lambda Function Sending message to SQS
+
+  DeleteGlacierArchivesFn:
+    Type: String
+    Default: DeleteGlacierArchives
+    AllowedValues: [ DeleteGlacierArchives ]
+    Description: Name of Lambda Function Polling from SQS
+
+  S3LambdaQueue:
+    Type: String
+    Description: Name of SQS Queue Used by both Lambda Functions
+    Default: s3-lambda-DeleteGlacierArchives
+    AllowedValues: [ "s3-lambda-DeleteGlacierArchives"]
+
+  DeadLetterQueue:
+    Type: String
+    Description: Name of DeadLetter Queue used by the Solution
+    Default: DeleteGlacierArchives_DLQ
+    AllowedValues: [ "DeleteGlacierArchives_DLQ"]
+
+  GlacierVault:
+    Type: String
+    Description: Enter Name of Glacier Vault from which to delete archives. REQUIRED!!!!
+
+  S3FileFolder:
+    Type: String
+    Description: Enter parent folder name (Without trailing \)
+    Default: archives
+
+  LogLevel:
+    Type: String
+    Description: Choose Logging level to be used by both Lambda Functions
+    Default: INFO
+    AllowedValues: [ "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+  LambdaConcurrency:
+    Type: Number
+    Description: Choose concurrency used by DeleteGlacierArchives Lambda function
+    Default: 3
+    AllowedValues: [ 1, 2, 3, 4, 5 ]
+
+Metadata: 
+  AWS::CloudFormation::Interface: 
+    ParameterGroups: 
+      - Label: 
+          default: "Glacier Configuration"
+        Parameters: [ GlacierVault ]
+      - Label: 
+          default: "S3 Configuration"
+        Parameters: [ S3FileFolder ]
+      - Label: 
+          default: "Lambda Configuration"
+        Parameters: [ S3ReaderFn, DeleteGlacierArchivesFn, LambdaConcurrency, LogLevel ]
+      - Label: 
+          default: "SQS Configuration"
+        Parameters: [ S3LambdaQueue, DeadLetterQueue ]
+    ParameterLabels: 
+      S3ReaderFn: 
+        default: "Source Function Name"
+      DeleteGlacierArchivesFn: 
+        default: "Target Function Name"
+      LambdaConcurrency: 
+        default: "Lambda Concurrency"
+      LogLevel: 
+        default: "Lambda Logging Level"
+      S3LambdaQueue: 
+        default: "Queue Name"
+      DeadLetterQueue: 
+        default: "DeadLetter Queue Name"
+      GlacierVault: 
+        default: "Glacier Vault Name"
+      S3FileFolder: 
+        default: "Folder path containing files with archive ids"
+
+Resources:
+  MainQueue:                
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties: 
+      QueueName: !Ref S3LambdaQueue
+      MessageRetentionPeriod: 345600
+      VisibilityTimeout: 901
+      ReceiveMessageWaitTimeSeconds: 20
+      RedrivePolicy: 
+        deadLetterTargetArn: !GetAtt DLQueue.Arn
+        maxReceiveCount: 300
+
+  DLQueue: 
+    Type: AWS::SQS::Queue
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Retain
+    Properties: 
+      QueueName: !Ref DeadLetterQueue
+      MessageRetentionPeriod: 345600
+      VisibilityTimeout: 300
+
+  S3BucketReaderLogGroup:
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Sub "/aws/lambda/${S3ReaderFn}"
+      RetentionInDays: 90
+
+  S3BucketReader:      
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Sends S3 Files containing Glacier Archive IDs to SQS queue
+      FunctionName: !Ref S3ReaderFn
+      Timeout: 900
+      Handler: S3BucketReader.lambda_handler
+      MemorySize: 256
+      PackageType: Zip
+      Role: !GetAtt S3BucketReaderRole.Arn
+      Runtime: python3.9
+      Code:
+        S3Bucket: !ImportValue "glacier-remover-bucket-name"
+        S3Key: s3_bucket_reader.zip
+      Environment:
+        Variables:
+          LOG_LEVEL: !Ref LogLevel
+          NUM_FILES: 1000 
+          SOURCE_BUCKET: !ImportValue "glacier-remover-bucket-name"
+          QUEUE_NAME: !Ref S3LambdaQueue
+          S3_ARCHIVE_PATH: !Ref S3FileFolder
+
+  S3BucketReaderRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "S3BucketReader-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Description: IAM Role Assummed by S3BucketReader Lambda Function
+      Path: /
+      Policies:
+        - PolicyName: S3BucketReaderExecutionRole
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${S3ReaderFn}:*"  
+              - Effect: Allow
+                Action: ["sqs:PurgeQueue","sqs:SendMessage","sqs:SetQueueAttributes","sqs:GetQueueUrl"]
+                Resource: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${S3LambdaQueue}"   
+              - Effect: Allow
+                Action: ["s3:ListBucket"]
+                Resource: [!ImportValue "glacier-remover-bucket-arn" ]         
+
+  DeleteGlacierArchivesLogGroup:
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Sub "/aws/lambda/${DeleteGlacierArchivesFn}"
+      RetentionInDays: 90
+
+  DeleteGlacierArchives:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Processes S3 files from SQS queue
+      FunctionName: !Ref DeleteGlacierArchivesFn
+      ReservedConcurrentExecutions: !Ref LambdaConcurrency 
+      Timeout: 900
+      Handler: DeleteGlacierArchives.lambda_handler
+      MemorySize: 256
+      PackageType: Zip
+      Role: !GetAtt DeleteGlacierArchiveRole.Arn
+      Runtime: python3.9
+      Code:
+        S3Bucket: !ImportValue "glacier-remover-bucket-name"
+        S3Key: delete_glacier_archive.zip
+      Environment:
+        Variables:
+          GLACIER_VAULT_NAME: !Ref GlacierVault
+          LOG_LEVEL: !Ref LogLevel
+          COUNT_DOWN_TIME: 840
+          QUEUE_NAME: !Ref S3LambdaQueue
+
+  DeleteGlacierArchiveRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "DeleteGlacierArchive-${AWS::Region}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Description: IAM Role Assummed by S3BucketReader Lambda Function
+      Path: /
+      Policies:
+        - PolicyName: DeleteGlacierArchiveExecutionRole
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${DeleteGlacierArchivesFn}:*"  
+              - Effect: Allow
+                Action: [
+                          "sqs:DeleteMessage",
+                          "s3:GetObject",
+                          "s3:PutObject",
+                          "sqs:ChangeMessageVisibility",
+                          "sqs:ReceiveMessage",
+                          "glacier:DeleteArchive",
+                          "sqs:GetQueueAttributes",
+                          "s3:DeleteObject",
+                          "sqs:SetQueueAttributes"
+                        ]
+                Resource: 
+                          - !Sub 
+                              - '${bucket_arn}/*'
+                              - bucket_arn: !ImportValue "glacier-remover-bucket-arn"
+                          - !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${S3LambdaQueue}"
+                          - !Sub "arn:${AWS::Partition}:glacier:${AWS::Region}:${AWS::AccountId}:vaults/${GlacierVault}"
+              - Effect: Allow
+                Action: ["sqs:SendMessage"]
+                Resource: [!Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${DeadLetterQueue}"] 
+              - Effect: Allow
+                Action: ["sqs:GetQueueUrl"]
+                Resource: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${S3LambdaQueue}"          
+
+  SQSEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: MainQueue
+    Properties:
+      BatchSize: 1 
+      EventSourceArn: !Sub "arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:${S3LambdaQueue}"
+      FunctionName: !Ref DeleteGlacierArchives
+
+Outputs: 
+  S3toLambdaQueue: 
+    Description: Main Queue used by both lambda functions to process S3 files
+    Value: 
+      !GetAtt MainQueue.QueueName
+  DeadLetterQueue: 
+    Description: DeadLetter Queue used by the Main Queue
+    Value: 
+      !GetAtt DLQueue.QueueName
+  ArchiveDeleterFn: 
+    Description: Lambda Function used to delete the glacier archives
+    Value: 
+      !GetAtt DeleteGlacierArchives.Arn
+  BucketreaderFn: 
+    Description: Lambda Function used to send S3 files to message Queue
+    Value: 
+      !GetAtt S3BucketReader.Arn
